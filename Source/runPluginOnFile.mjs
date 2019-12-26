@@ -1,5 +1,5 @@
 import babel from "@babel/core";
-import atomicishPlugin from "./babel-plugin-atomicable/src/index.mjs";
+import atomicishPlugin from "./atomicable_babel_plugin.mjs";
 
 function main()
 {

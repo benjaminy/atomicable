@@ -424,7 +424,7 @@ function enterIdentifier( path )
 function enterProgram( path, { file, opts } )
 {
     // console.log(  );
-    ModuleImports.addNamespace( path, "../Source/atomicable_runtime.mjs", { nameHint: "_AtomicableRuntime" } );
+    ModuleImports.addNamespace( path, "./runtime_lib.mjs", { nameHint: "_AtomicableRuntime" } );
 }
 
 function atomicishPlugin()
