@@ -22,9 +22,9 @@ This plugin transforms the following pieces of syntax:
 
 */
 
-const BODY_NOT_ASYNC = Symbol( "body not async" );
-const BODY_ASYNC     = Symbol( "body async" );
-const body_stack     = [ BODY_NOT_ASYNC ];
+const HAVE_ATOMIC_CTX = Symbol( "Have atomic ctx" );
+const NO_ATOMIC_CTX   = Symbol( "No atomic ctx" );
+const body_stack     = [ NO_ATOMIC_CTX ];
 
 const assignStmt = ( lhs, rhs ) =>
       T.expressionStatement( T.assignmentExpression( "=", lhs, rhs ) );
@@ -37,63 +37,73 @@ function runtimeLib( ...member )
         ...member
     );
 }
-const magic = () => runtimeLib( T.identifier( "MAGIC_FN_TAG" ) );
+const magic_fn   = () => runtimeLib( T.identifier( "MAGIC_FN_TAG" ) );
 const hidden_ctx = T.identifier( "__atomicish_ctx" );
 const params_id  = T.identifier( "params" );
 const params_spread = () => T.spreadElement( params_id );
 
 /*
 Function/Method Calls
+
+IF NO ATOMIC CTX, NO CHANGE
+OTHERWISE:
 ----------------------------------------------------------------
 e1( x, y, z )
 
 ~>
 
-( ( callee, ...params ) =>
-    MAGIC_FN_TAG in callee
-        ? callee[ MAGIC_FN_TAG ]( __ctx, ...params )
-        : callee( ...params ) )
-    ( e1, x, y, z )
+( ( callee ) => {
+    if( MAGIC_FN_TAG in callee )
+        callee[ MAGIC_FN_TAG ].x = __ctx;
+    return callee( x, y, z );
+} )
+( e1 )
 ----------------------------------------------------------------
-e1.prop( x, y, z )
+e1.property( x, y, z )
 
 ~>
 
-( ( callee, ...params ) =>
-    MAGIC_FN_TAG in callee.prop
-        ? callee.prop[ MAGIC_FN_TAG ]( __ctx, ...params )
-        : callee.prop( ...params ) )
-    ( e1, x, y, z )
+( ( callee ) => {
+    if( MAGIC_FN_TAG in callee.prop )
+        callee.property[ MAGIC_FN_TAG ].x = __ctx;
+    return callee.property( x, y, z );
+} )
+( e1 )
 ----------------------------------------------------------------
-e1[ e2 ]( x, y, z )
+e1[ property ]( x, y, z )
 
 ~>
 
-( ( callee, prop, ...params ) =>
-    MAGIC_FN_TAG in callee[ prop ]
-        ? callee[ prop ][ MAGIC_FN_TAG ]( __ctx, ...params )
-        : callee[ prop ]( ...params ) )
-    ( e1, e2, x, y, z )
+( ( callee, prop ) => {
+    if( MAGIC_FN_TAG in callee[ prop ] )
+        callee[ prop ][ MAGIC_FN_TAG ].x = __ctx;
+    return callee[ prop ]( x, y, z );
+} )
+( e1, property )
 ----------------------------------------------------------------
-REMINDER: Using '...params' is fine; the original AST doesn't have param names
 */
 function exitCallExpression( path )
 {
-    const callee_id = T.identifier( "callee" );
-    var wrapper_formals = [ callee_id, T.restElement( params_id ) ];
-    var wrapper_actuals = [ path.node.callee, ...path.node.arguments ];
+    if( body_stack[ 0 ] === NO_ATOMIC_CTX )
+    {
+        return;
+    }
+    assert( body_stack[ 0 ] === HAVE_ATOMIC_CTX );
 
+    const callee_id = T.identifier( "callee" );
+    var wrapper_formals = [ callee_id ];
+    var wrapper_actuals = [ path.node.callee ];
     var callee_prop = null;
+
     if( T.isMemberExpression( path.node.callee ) )
     {
         callee_prop     = path.node.callee.property;
-        wrapper_actuals = [ path.node.callee.object, ...path.node.arguments ];
+        wrapper_actuals = [ path.node.callee.object ];
         if( path.node.callee.computed )
         {
             callee_prop = T.identifier( "prop" );
-            wrapper_formals = [ callee_id, callee_prop, T.restElement( params_id ) ];
-            wrapper_actuals = [
-                path.node.callee.object, path.node.callee.property, ...path.node.arguments ];
+            wrapper_formals = [ callee_id, callee_prop ];
+            wrapper_actuals = [ path.node.callee.object, path.node.callee.property ];
         }
     }
 
@@ -108,14 +118,21 @@ function exitCallExpression( path )
         T.callExpression(
             T.arrowFunctionExpression(
                 wrapper_formals,
-                T.ConditionalExpression (
-                    T.binaryExpression( "in", magic(), callee_exp() ),
-                    T.callExpression(
-                        T.memberExpression( callee_exp(), magic(), true ),
-                        [ hidden_ctx, params_spread() ]
+                T.blockStatement( [
+                    T.ifStatement(
+                        T.binaryExpression( "in", magic_fn(), callee_exp() ),
+                        assignStmt(
+                            T.memberExpression(
+                                T.memberExpression( callee_exp(), magic_fn(), true ),
+                                T.identifier( "x" )
+                            ),
+                            hidden_ctx
+                        )
                     ),
-                    T.callExpression( callee_exp(), [ params_spread() ] )
-                )
+                    T.returnStatement(
+                        T.callExpression( callee_exp(), path.node.arguments )
+                    )
+                ] )
             ),
             wrapper_actuals
         )
@@ -125,11 +142,14 @@ function exitCallExpression( path )
 }
 
 /*
-  await body
+IF NO ATOMIC CTX, NO CHANGE
+OTHERWISE:
+----------------------------------------------------------------
+await body
 
-  ~>
+~>
 
-  await ( ( async () => {
+await ( ( async () => {
     await Runtime.wait( __ctx );
     try { return await body; }
     finally { await Runtime.wait( __ctx ) } } )() )
@@ -138,7 +158,11 @@ REMINDER: Need the wrapper await/async because "await exp" is an expression.
 */
 function exitAwaitExpression( path )
 {
-    assert( body_stack[ 0 ] === BODY_ASYNC );
+    if( body_stack[ 0 ] === NO_ATOMIC_CTX )
+    {
+        return;
+    }
+    assert( body_stack[ 0 ] === HAVE_ATOMIC_CTX );
 
     function call_wait()
     {
@@ -176,6 +200,9 @@ function exitAwaitExpression( path )
 NOTE: Will break programs that use 'atomicish' as a label.
 Hopefully that's extremely uncommon.
 
+IF NO ATOMIC CTX, NO CHANGE
+OTHERWISE:
+----------------------------------------------------------------
 atomicish: {
    body
 }
@@ -197,14 +224,43 @@ atomicish: {
 }
 */
 
+function enterLabeledStatement( path )
+{
+    if( path.node.label.name === "__atomicable_have_context" )
+    {
+        body_stack.unshift( HAVE_ATOMIC_CTX );
+    }
+    if( path.node.label.name === "__atomicable_no_context" )
+    {
+        body_stack.unshift( NO_ATOMIC_CTX );
+    }
+}
+
 function exitLabeledStatement( path )
 {
-    if( body_stack[ 0 ] === BODY_NOT_ASYNC
-        || !( path.node.label.name === "atomicish" ) )
+    if( ( path.node.label.name === "__atomicable_have_context" )
+        || ( path.node.label.name === "__atomicable_no_context" ) )
+    {
+        const b = body_stack.shift();
+        assert( b ===  ( path.node.label.name === "__atomicable_have_context"
+                         ? HAVE_ATOMIC_CTX : NO_ATOMIC_CTX ) );
+        path.replaceWith( path.node.body );
+        path.skip();
+        return;
+    }
+
+    if( !( path.node.label.name === "atomicish" ) )
     {
         return;
     }
-    assert( body_stack[ 0 ] === BODY_ASYNC );
+
+    if( body_stack[ 0 ] === NO_ATOMIC_CTX )
+    {
+        path.replaceWith( path.node.body );
+        path.skip();
+        return;
+    }
+    assert( body_stack[ 0 ] === HAVE_ATOMIC_CTX );
 
     const x = T.identifier( "__dumb_js_scope_workaround" );
     path.replaceWith(
@@ -243,73 +299,151 @@ function exitLabeledStatement( path )
     path.skip();
 }
 
-function enterFunctionDefn( path )
+var just_started_fun_defn = false;
+/*
+Intermediate step:
+f(...)
 {
-    body_stack.unshift( path.node.async ? BODY_ASYNC : BODY_NOT_ASYNC );
-}
-
-function exitFunHelper( path )
-{
-    const body_state = body_stack.shift();
-    if( ( body_state === BODY_ASYNC && !path.node.async )
-        || ( body_state === BODY_NOT_ASYNC && path.node.async ) )
-    {
-        throw new Error( "Translation state fubar'd" );
+    __have_ctx: {
+        body copy 1
     }
-    return !path.node.async;
+    __no_ctx: {
+        body copy 2
+    }
+}
+*/
+function funBody( body )
+{
+    return T.blockStatement( [
+        T.labeledStatement( T.identifier( "__atomicable_have_context" ), body ),
+        T.labeledStatement( T.identifier( "__atomicable_no_context" ), T.cloneNode( body ) )
+    ] );
+}
+
+function enterFunctionDeclaration( path )
+{
+    if( just_started_fun_defn )
+    {
+        just_started_fun_defn = false;
+        return;
+    }
+    if( path.node.generator ) return;
+    just_started_fun_defn = true;
+    const n = path.node;
+    path.replaceWith(
+        T.functionDeclaration( n.id, n.params, funBody( n.body ), n.generator, n.async ) );
+}
+
+function enterFunctionExpression( path )
+{
+    if( just_started_fun_defn )
+    {
+        just_started_fun_defn = false;
+        return;
+    }
+    if( path.node.generator ) return;
+    just_started_fun_defn = true;
+    const n = path.node;
+    path.replaceWith(
+        T.functionExpression( n.id, n.params, funBody( n.body ), n.generator, n.async ) );
+}
+
+function enterArrowFunctionExpression( path )
+{
+    if( just_started_fun_defn )
+    {
+        just_started_fun_defn = false;
+        return;
+    }
+    just_started_fun_defn = true;
+    const n = path.node;
+    const body = T.isExpression( n.body ) ? blockJustRet( n.body ) : n.body;
+    path.replaceWith(
+        T.arrowFunctionExpression( n.params, funBody( body ), n.async ) );
 }
 
 /*
-NOTE: Could use cloneNode to make two copies of the body, which would
-eliminate the need to check for null __ctx in other contexts.  Probably
-one copy of the body is better for now.
+NOTE: This transformation makes 2 copies of the function body, one for
+the case where a context is passed in, one for the case without a
+context.  This copying will create a code expansion that is exponential
+in the depth of function definition nesting.  If this expansion ever
+creates problems in practce, the answer is Lambda Lifting.
+
+Even with lambda lifting, this does approximately double the code size.
+That's not great, and maybe worth optimizing some time later.
+
+It is possible to do the transformation without the code duplication by
+checking for the existence of the context at each point of use.  But
+that seems like a worse tradeoff in "normal" code.
 */
 
-/*
-NOTE: Adding a parameter to the beginning of the parameter list will
-probably break programs that explicitly access the 'arguments' variable.
-AFAIK modifying 'arguments' directly does not work.  Probably could go
-through and modify all references to it, but that seems like a lot of
-work for little benefit for a prototype.
-*/
+
 /*
 FUN_DEFN_HELPER( fun_name, params, body, ?is_async? ) =
 ( () => {
-    ?async? temp( __ctx, params )
+    const magic = { x : null };
+    ?async? fun_name( params )
     {
-        [[ body ]]
+        if( magic.x )
+        {
+            const __ctx = magic.x;
+            magic.x = null;
+            [ HAVE ATOMIC CTX [ body ]]
+        }
+        else
+        {
+            [ NO ATOMIC CTX [ body ]]
+        }
     }
-    function fun_name( ...params ) { return temp( null, ...params ); }
-    fun_name[ MAGIC_FN_TAG ] = temp;
+    fun_name[ MAGIC_FN_TAG ] = magic;
     return fun_name;
 } )()
 */
 function funDefnHelper( fun_id, params, body, is_async )
 {
-    const temp_id = T.identifier( "temp" );
-    params.unshift( hidden_ctx );
+    assert( T.isBlockStatement( body ) );
+    assert( body.body.length === 2 );
+    const have_atomic_body = body.body[ 0 ];
+    const no_atomic_body   = body.body[ 1 ];
+    const magic_id = T.identifier( "__atomicish_magic" );
+    const x_id = T.identifier( "x" );
 
     return T.callExpression(
         T.arrowFunctionExpression(
             [], // empty formals
             T.blockStatement( [
+                T.variableDeclaration( "const", [
+                    T.variableDeclarator(
+                        magic_id,
+                        T.objectExpression( [ T.objectProperty( x_id, T.nullLiteral() ) ] )
+                    )
+                ] ),
                 T.functionDeclaration(
-                    temp_id,
+                    fun_id,
                     params,
-                    body,
+                    T.blockStatement( [
+                        T.ifStatement(
+                            T.memberExpression( magic_id, x_id ),
+                            T.blockStatement( [
+                                T.variableDeclaration( "const", [
+                                    T.variableDeclarator(
+                                        hidden_ctx,
+                                        T.memberExpression( magic_id, x_id )
+                                    )
+                                ] ),
+                                assignStmt(
+                                    T.memberExpression( magic_id, x_id ),
+                                    T.nullLiteral()
+                                ),
+                                have_atomic_body
+                            ] ),
+                            no_atomic_body
+                        )
+                    ] ),
                     false, // generator
                     is_async
                 ),
-                T.functionDeclaration(
-                    fun_id,
-                    [ T.restElement( params_id ) ],
-                    blockJustRet(
-                        T.callExpression( temp_id, [ T.nullLiteral(), params_spread() ] )
-                    ),
-                    false, //generator
-                    false // async
-                ),
-                assignStmt( T.memberExpression( fun_id, magic(), true ), temp_id ),
+                assignStmt( T.memberExpression( fun_id, magic_fn(), true ), magic_id ),
                 T.returnStatement( fun_id )
             ] )
         ),
@@ -337,7 +471,6 @@ const fun_name = FUN_DEFN_HELPER( fun_name, [ x, y, z ], body, ?async? );
 
 function exitFunctionDeclaration( path )
 {
-    exitFunHelper( path );
     if( path.node.generator )
         return;
 
@@ -350,7 +483,6 @@ function exitFunctionDeclaration( path )
             )
         ] )
     );
-
     path.skip();
 }
 
@@ -364,14 +496,12 @@ FUN_DEFN_HELPER( fun_name ? "anon", [ x, y, z ], body, ?async? )
 
 function exitFunctionExpression( path )
 {
-    exitFunHelper( path );
     if( path.node.generator )
         return;
 
     const fun_id = path.node.id ? path.node.id : T.identifier( "anon" );
     path.replaceWith( funDefnHelper(
         fun_id, path.node.params, path.node.body, path.node.async ) );
-
     path.skip();
 }
 
@@ -386,14 +516,9 @@ FUN_DEFN_HELPER( "anon", [ x, y, z ], { return body; }, ?async? )
 
 function exitArrowFunctionExpression( path )
 {
-    exitFunHelper( path );
 
-    const body = T.isExpression( path.node.body )
-          ? blockJustRet( path.node.body )
-          : path.node.body;
     path.replaceWith( funDefnHelper(
-        T.identifier( "anon" ), path.node.params, body, path.node.async ) );
-
+        T.identifier( "anon" ), path.node.params, path.node.body, path.node.async ) );
     path.skip();
 }
 
@@ -408,16 +533,22 @@ function enterIdentifier( path )
     {
         path.replaceWith( runtimeLib( T.identifier( "main" ) ) );
     }
-    if( body_stack[ 0 ] === BODY_ASYNC
-        && path.node.name === "__atomicish_mode" )
+    if( path.node.name === "__atomicish_mode" )
     {
-        path.replaceWith(
-            T.callExpression(
-                runtimeLib( T.identifier( "inAtomicMode" ) ),
-                [ hidden_ctx ]
-            )
-        );
-        path.skip();
+        if( body_stack[ 0 ] === HAVE_ASYNC_CTX )
+        {
+            path.replaceWith(
+                T.callExpression(
+                    runtimeLib( T.identifier( "inAtomicMode" ) ),
+                    [ hidden_ctx ]
+                )
+            );
+            path.skip();
+        }
+        else
+        {
+            path.replaceWith( T.booleanLiteral( false ) );
+        }
     }
 }
 
@@ -436,13 +567,14 @@ function atomicishPlugin()
             Identifier          : enterIdentifier,
             CallExpression      : { exit : exitCallExpression },
             AwaitExpression     : { exit : exitAwaitExpression },
-            LabeledStatement    : { exit : exitLabeledStatement },
-            FunctionDeclaration : { enter: enterFunctionDefn,
+            LabeledStatement    : { enter: enterLabeledStatement,
+                                    exit : exitLabeledStatement },
+            FunctionDeclaration : { enter: enterFunctionDeclaration,
                                     exit : exitFunctionDeclaration },
-            FunctionExpression  : { enter: enterFunctionDefn,
+            FunctionExpression  : { enter: enterFunctionExpression,
                                     exit : exitFunctionExpression },
             ArrowFunctionExpression :
-                                  { enter: enterFunctionDefn,
+                                  { enter: enterArrowFunctionExpression,
                                     exit : exitArrowFunctionExpression }
         }
     };

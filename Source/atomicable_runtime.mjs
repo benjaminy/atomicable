@@ -1,9 +1,9 @@
 import assert from "assert";
 
-export const MAGIC_FN_TAG = Symbol( "magic fn tag" );
-const CTX_STATE_ACTIVE    = Symbol( "context state active" );
-const CTX_STATE_PAUSED    = Symbol( "context state paused" );
-const CTX_STATE_FINISHED  = Symbol( "context state finished" );
+export const MAGIC_FN_TAG     = Symbol( "magic fn tag" );
+const CTX_STATE_ACTIVE        = Symbol( "context state active" );
+const CTX_STATE_PAUSED        = Symbol( "context state paused" );
+const CTX_STATE_FINISHED      = Symbol( "context state finished" );
 
 function makeContext( global, prev )
 {
@@ -21,7 +21,8 @@ export async function main( f )
     assert( MAGIC_FN_TAG in f );
     const global = {};
     global.current = makeContext( global, null );
-    return await f[ MAGIC_FN_TAG ]( global.current );
+    f[ MAGIC_FN_TAG ].x = global.current;
+    return await f();
 }
 
 /* NOTE: The idea here is that checking for atomic mode only at awaits
@@ -39,10 +40,7 @@ export async function call( ctx, callee, method, ...params )
 
 export async function enterAtomic( ctx, body )
 {
-    if( !ctx )
-    {
-        return null;
-    }
+    assert( ctx );
     await mutexAcquire( ctx.mutex, () => { ctx.state = CTX_STATE_PAUSED; } );
     ctx.state = CTX_STATE_ACTIVE;
     const global = ctx.global;
@@ -56,10 +54,7 @@ export async function enterAtomic( ctx, body )
  * concurrent flows of some sort to finish. */
 export async function exitAtomic( new_ctx )
 {
-    if( !new_ctx )
-    {
-        return;
-    }
+    assert( new_ctx );
     assert( new_ctx.waiters.length === 0 );
     const ctx = new_ctx.prev;
     const global = new_ctx.global;
@@ -79,19 +74,13 @@ export async function exitAtomic( new_ctx )
 
 export function inAtomicMode( ctx )
 {
-    if( !ctx )
-    {
-        return false;
-    }
+    assert( ctx );
     return !( ctx.prev === null );
 }
 
 export async function wait( ctx )
 {
-    if( !ctx )
-    {
-        return;
-    }
+    assert( ctx );
 
     while( true )
     {

@@ -13,7 +13,7 @@ async function delayedMessage( seconds, msg )
 
 async function abc( msg )
 {
-    // atomicish:
+    atomicish:
     {
         await delayedMessage( 0, "A"+msg );
         await delayedMessage( 0, "B"+msg );

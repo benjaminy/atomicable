@@ -14,7 +14,7 @@ async function delayedMessage( seconds, msg )
 async function test1()
 {
     const p1 = delayedMessage( 2, "Hello" );
-    // atomicish:
+    atomicish:
     {
         delayedMessage( 1, "3" );
         delayedMessage( 2, "2" );
@@ -24,4 +24,7 @@ async function test1()
     await p1;
 }
 
-__atomicable_main( test1 ).then( () => { console.log( "Test's all done." ) } );
+__atomicable_main( test1 ).then(
+    () => {
+        console.log( "Test's all done." )
+    } );
