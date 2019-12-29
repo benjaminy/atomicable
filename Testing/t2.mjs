@@ -5,9 +5,9 @@ function sleep( milliseconds )
     );
 }
 
-async function delayedMessage( seconds, msg )
+async function delayedMessage( milliseconds, msg )
 {
-    await sleep( seconds * 1000 );
+    await sleep( milliseconds );
     console.log( msg );
 }
 
@@ -15,9 +15,9 @@ async function abc( msg )
 {
     atomicish:
     {
-        await delayedMessage( 0, "A"+msg );
-        await delayedMessage( 0, "B"+msg );
-        await delayedMessage( 0, "C"+msg );
+        await delayedMessage( 10, "A"+msg );
+        await delayedMessage( 10, "B"+msg );
+        await delayedMessage( 10, "C"+msg );
     }
 }
 
@@ -31,6 +31,7 @@ async function main()
     await Promise.all( promises );
 }
 
+const timestamp_before = new Date();
 __atomicable_main( main ).then(
-    () => { console.log( "Test's all done." ) }
+    () => { console.log( "Test's all done.", ( new Date() - timestamp_before ) ) }
 );
