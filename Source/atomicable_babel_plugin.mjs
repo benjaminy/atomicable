@@ -294,7 +294,7 @@ function exitLabeledStatement( path )
                 )
             ] )
         ] )
-    )
+    );
 
     path.skip();
 }
@@ -320,15 +320,21 @@ function funBody( body )
     ] );
 }
 
-function enterFunctionDeclaration( path )
+function enterFun( path )
 {
     if( just_started_fun_defn )
     {
         just_started_fun_defn = false;
-        return;
+        return true;
     }
-    if( path.node.generator ) return;
+    if( path.node.generator ) return true;
     just_started_fun_defn = true;
+    return false;
+}
+
+function enterFunctionDeclaration( path )
+{
+    if( enterFun( path ) ) return;
     const n = path.node;
     path.replaceWith(
         T.functionDeclaration( n.id, n.params, funBody( n.body ), n.generator, n.async ) );
@@ -336,13 +342,7 @@ function enterFunctionDeclaration( path )
 
 function enterFunctionExpression( path )
 {
-    if( just_started_fun_defn )
-    {
-        just_started_fun_defn = false;
-        return;
-    }
-    if( path.node.generator ) return;
-    just_started_fun_defn = true;
+    if( enterFun( path ) ) return;
     const n = path.node;
     path.replaceWith(
         T.functionExpression( n.id, n.params, funBody( n.body ), n.generator, n.async ) );
@@ -350,12 +350,7 @@ function enterFunctionExpression( path )
 
 function enterArrowFunctionExpression( path )
 {
-    if( just_started_fun_defn )
-    {
-        just_started_fun_defn = false;
-        return;
-    }
-    just_started_fun_defn = true;
+    if( enterFun( path ) ) return;
     const n = path.node;
     const body = T.isExpression( n.body ) ? blockJustRet( n.body ) : n.body;
     path.replaceWith(
@@ -450,15 +445,6 @@ function funDefnHelper( fun_id, params, body, is_async )
         [] // empty actuals
     );
 }
-
-/*
- * XXX: I think non-async functions should pass along the hidden context
- * ... have to keep thinking about it.
- * ... on the other hand normal functions can't await so it's a little weird
- * ... on the third hand JS is so dynamic that maybe it's common to have non-async
- *   wrappers (in some loose sense) for async functions, so it would be good to pass
- *   the context along
- */
 
 /*
 ?async? function fun_name( x, y, z ) { body }
