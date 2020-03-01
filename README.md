@@ -215,7 +215,14 @@ Which might sound kind of cool, but in fact __a strong majority of calls to asyn
 
 ## Why (Part 2)
 
-...
+The idea of enforcing atomicity on a chain of continuations might seem unnecessary: a bit of added complexity for little benefit.
+There has been some research on the impact of concurrency bugs in JS (For example, "A Comprehensive Study on Real World Concurrency Bugs in Node.js" [IEEE](https://ieeexplore.ieee.org/document/8115663), [ACM](https://dl.acm.org/doi/10.5555/3155562.3155628), [.pdf](http://www.tcse.cn/~wsdou/papers/2017-ase-nodecb.pdf)).
+
+As a subtler bit of evidence that there's an interesting tricky trade-off between atomicity and interruptibility, in widely used standard libraries (like Node.js and .NET Core) there are lots of "duplicate" functions of the form `XXX` and `XXX\_sync` (or `XXX` and `XXX\_async`).
+It seems at first glance that only the async version should be necessary; application code can always `await` an async call to block the current continuation chain.
+But in fact sometimes one really wants to block the whole application until some set of actions are done.
+Providing duplicate sync and async versions of library functions is a deeply unsatisfying way to accomplish this.
+Having a generic atomic block is much nicer.
 
 ## Limitations
 

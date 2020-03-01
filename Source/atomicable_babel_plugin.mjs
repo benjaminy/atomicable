@@ -149,10 +149,12 @@ await body
 
 ~>
 
-await ( ( async () => {
+await ( ( async () =>
+  {
     await Runtime.wait( __ctx );
     try { return await body; }
-    finally { await Runtime.wait( __ctx ) } } )() )
+    finally { await Runtime.wait( __ctx ) }
+  } ) () )
 
 REMINDER: Need the wrapper await/async because "await exp" is an expression.
 */
